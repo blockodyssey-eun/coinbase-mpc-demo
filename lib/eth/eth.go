@@ -6,7 +6,9 @@ import (
 	"crypto/ecdsa"
 	"fmt"
 	"math/big"
+	"time"
 
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -15,9 +17,14 @@ import (
 
 // 로우 트랜잭션 생성
 func GenerateTransaction(nonce uint64, to common.Address, amount *big.Int, gasLimit uint64, gasPrice *big.Int, data []byte) *types.Transaction {
-	tx := types.NewTransaction(
-
-		nonce, to, amount, gasLimit, gasPrice, nil)
+	tx := types.NewTx(&types.LegacyTx{
+		Nonce:    nonce,
+		To:       &to,
+		Value:    amount,
+		Gas:      gasLimit,
+		GasPrice: gasPrice,
+		Data:     data,
+	})
 	return tx
 }
 
@@ -30,6 +37,9 @@ func SignTransactionWithPrivateKey(client *ethclient.Client, privateKey *ecdsa.P
 	}
 
 	fromAddress := crypto.PubkeyToAddress(*publicKeyECDSA)
+	fmt.Printf("fromAddress: %s\n", fromAddress)
+	fmt.Printf("toAddress: %s\n", toAddress)
+
 	nonce, err := client.PendingNonceAt(context.Background(), fromAddress)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get nonce: %v", err)
@@ -56,15 +66,47 @@ func SignTransactionWithPrivateKey(client *ethclient.Client, privateKey *ecdsa.P
 	return signedTx, nil
 }
 
-// 서명 트랜잭션 브로드캐스트
-func SendSignedTransaction(client *ethclient.Client, signedTx *types.Transaction) error {
+// 서명 트랜잭션 브로드 케스트
+func SendSignedTransaction(client *ethclient.Client, signedTx *types.Transaction, wait ...bool) error {
+	// wait의 기본값을 false로 설정
+	shouldWait := false
+	if len(wait) > 0 {
+		shouldWait = wait[0]
+	}
+
+	// 트랜잭션 전송
 	err := client.SendTransaction(context.Background(), signedTx)
 	if err != nil {
 		return fmt.Errorf("failed to send transaction: %v", err)
 	}
 
-	fmt.Printf("transaction sent: %s\n", signedTx.Hash().Hex())
+	fmt.Printf("Transaction sent: %s\n", signedTx.Hash().Hex())
+
+	// 트랜잭션 완료를 기다릴지 결정
+	if shouldWait {
+		receipt, err := waitForTransaction(client, signedTx.Hash())
+		if err != nil {
+			return fmt.Errorf("error waiting for transaction: %v", err)
+		}
+		fmt.Printf("Transaction confirmed in block %d\n", receipt.BlockNumber.Uint64())
+	}
+
 	return nil
+}
+
+// 트랜잭션 완료를 기다리는 헬퍼 함수
+func waitForTransaction(client *ethclient.Client, txHash common.Hash) (*types.Receipt, error) {
+	for {
+		receipt, err := client.TransactionReceipt(context.Background(), txHash)
+		if err != nil {
+			if err == ethereum.NotFound {
+				time.Sleep(time.Second) // 1초 대기 후 다시 시도
+				continue
+			}
+			return nil, err
+		}
+		return receipt, nil
+	}
 }
 
 // 트랜잭션 RLP 인코딩

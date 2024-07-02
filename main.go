@@ -3,6 +3,7 @@ package main
 import (
 	"coinbase_tecdsa_2/lib/eth"
 	"context"
+	"crypto/ecdsa"
 	"fmt"
 	"log"
 	"math/big"
@@ -13,6 +14,7 @@ import (
 	"github.com/coinbase/kryptology/pkg/tecdsa/dkls/v1/sign"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
 
@@ -31,12 +33,17 @@ func loadENV() (string, string) {
 }
 
 func main() {
-	INFURA_KEY, _ := loadENV()
+	INFURA_KEY, PRIVATE_KEY := loadENV()
 
 	infuraURL := fmt.Sprintf("https://sepolia.infura.io/v3/%s", INFURA_KEY)
 	client, err := ethclient.Dial(infuraURL)
 	if err != nil {
 		log.Fatalf("failed to connect to the Ethereum client: %v", err)
+	}
+
+	chainID, err := client.NetworkID(context.Background())
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	curve := curves.K256()
@@ -46,11 +53,21 @@ func main() {
 	// message := []byte("hello world")
 	// signature := full_sign(curve, message, aliceDkg, bobDkg)
 	// fmt.Println("signature: ", signature)
+	// 테스트 이더 주입
+	privateKey, err := crypto.HexToECDSA(PRIVATE_KEY)
+	if err != nil {
+		log.Fatalf("failed to load private key: %v", err)
+	}
+	testAmount := big.NewInt(10000000000000) // 0.0001 Ether
 
-	rlpEncodedTx := generateRlpEncodedTx(
+	injectTestEther(client, privateKey, address, testAmount)
+	fmt.Println("Test ether injected successfully")
+
+	tx, rlpEncodedTx := generateRlpEncodedTx(
 		*client,
 		address,
 		common.HexToAddress("0x1139F74a15f25f7503B30cd36D527DA5A6D3E15D"),
+		new(big.Int).Div(testAmount, big.NewInt(2)),
 	)
 	signature := full_sign(curve, rlpEncodedTx, aliceDkg, bobDkg)
 	fmt.Println("signature: ", signature)
@@ -82,9 +99,41 @@ func main() {
 	// kryptology 라이브러리로 서명 검증
 	isVerifiedByKryptology := curves.VerifyEcdsa(publicKey, digest, signature)
 	fmt.Println("is Verify by kryptology:", isVerifiedByKryptology)
+
+	v := byte(27)
+	// EIP-155 적용
+	bigV := new(big.Int).SetUint64(uint64(v))
+	bigV.Add(bigV, new(big.Int).Mul(chainID, big.NewInt(2)))
+	bigV.Add(bigV, big.NewInt(8))
+
+	signatureBytes = append(signatureBytes, v)
+
+	signedTx, err := tx.WithSignature(types.LatestSignerForChainID(chainID), signatureBytes)
+	if err != nil {
+		log.Fatalf("failed to add signature to transaction: %v", err)
+	}
+
+	// Send signed transaction
+	err = eth.SendSignedTransaction(client, signedTx)
+	if err != nil {
+		log.Fatalf("failed to send signed transaction: %v", err)
+	}
+
 }
 
-func generateRlpEncodedTx(client ethclient.Client, fromAddress common.Address, toAddress common.Address) []byte {
+func injectTestEther(client *ethclient.Client, privateKey *ecdsa.PrivateKey, toAddress common.Address, amount *big.Int) {
+	signedTx, err := eth.SignTransactionWithPrivateKey(client, privateKey, toAddress, amount)
+	if err != nil {
+		log.Fatalf("failed to sign transaction: %v", err)
+	}
+
+	err = eth.SendSignedTransaction(client, signedTx, true)
+	if err != nil {
+		log.Fatalf("failed to send signed transaction: %v", err)
+	}
+}
+
+func generateRlpEncodedTx(client ethclient.Client, fromAddress common.Address, toAddress common.Address, amount *big.Int) (*types.Transaction, []byte) {
 	// sign
 	nonce, err := client.PendingNonceAt(context.Background(), fromAddress)
 	if err != nil {
@@ -95,15 +144,14 @@ func generateRlpEncodedTx(client ethclient.Client, fromAddress common.Address, t
 	if err != nil {
 		log.Fatalf("failed to get gas price: %v", err)
 	}
-	testAmount := big.NewInt(100000000000000) // 0.0001 Ether
 
 	gasLimit := uint64(21000)
-	tx := eth.GenerateTransaction(nonce, toAddress, testAmount, gasLimit, gasPrice, nil)
+	tx := eth.GenerateTransaction(nonce, toAddress, amount, gasLimit, gasPrice, nil)
 
 	rlpEncodedTx, _ := tx.MarshalBinary()
 	fmt.Println("rlpEncodedTx: ", rlpEncodedTx)
 	fmt.Println("common.Bytes2Hex(rlpEncodedTx): ", common.Bytes2Hex(rlpEncodedTx))
-	return rlpEncodedTx
+	return tx, rlpEncodedTx
 }
 
 func full_dkg(curve *curves.Curve) (*dkg.Alice, *dkg.Bob, string, common.Address) {
