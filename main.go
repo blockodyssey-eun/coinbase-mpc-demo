@@ -76,7 +76,7 @@ func main() {
 	fmt.Printf("Signature: R = %s, S = %s\n", signature.R.String(), signature.S.String())
 
 	signatureBytes := append(signature.R.Bytes(), signature.S.Bytes()...)
-	isVerifiedByGoEthereum := crypto.VerifySignature(publicKey.Bytes(), digest, signatureBytes)
+	isVerifiedByGoEthereum := crypto.VerifySignature(unCompressedAffinePublicKey, digest, signatureBytes)
 	fmt.Println("is Verify by go-ethereum:", isVerifiedByGoEthereum)
 
 	// kryptology 라이브러리로 서명 검증
