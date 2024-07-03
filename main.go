@@ -2,6 +2,7 @@ package main
 
 import (
 	"coinbase_tecdsa_2/lib/eth"
+	iodkg "coinbase_tecdsa_2/lib/io_dkg"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/rlp"
 
 	"github.com/joho/godotenv"
 	"golang.org/x/crypto/sha3"
@@ -45,75 +47,112 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	const dkgFilename = "dkg_data.json"
+
+	var aliceOutput *dkg.AliceOutput
+	var bobOutput *dkg.BobOutput
+	var address common.Address
 
 	curve := curves.K256()
 
 	// make dkg
-	aliceDkg, bobDkg, _, address := full_dkg(curve)
+	// Load or create DKG data
+	if _, err := os.Stat(dkgFilename); os.IsNotExist(err) {
+		aliceDkg, bobDkg, _, address := full_dkg(curve)
+		err = iodkg.SaveDkgData(aliceDkg, bobDkg, address, dkgFilename)
+		if err != nil {
+			log.Fatalf("Failed to save DKG data: %v", err)
+		}
+		fmt.Println("Created and saved new DKG data")
+		aliceOutput = aliceDkg.Output()
+		bobOutput = bobDkg.Output()
+	} else {
+		aliceOutput, bobOutput, address, err = iodkg.LoadDkgData(dkgFilename, curve)
+		if err != nil {
+			log.Fatalf("Failed to load DKG data: %v", err)
+		}
+		fmt.Println("Loaded existing DKG data")
+	}
+
 	fmt.Println("Created new address:", address)
 
 	// inject test ether
 	amount := big.NewInt(10000000000000) // 0.0001 Ether
 	// injectTestEther(client, PRIVATE_KEY, address, amount)
 
+	signer := types.NewEIP155Signer(chainID)
 	// make raw tx
-	tx, rlpEncodedTx := generateRlpEncodedTx(
+	tx, txHash := generateRlpEncodedTx(
 		*client,
+		signer,
 		address,
 		common.HexToAddress("0x1139F74a15f25f7503B30cd36D527DA5A6D3E15D"),
 		new(big.Int).Div(amount, big.NewInt(3)),
 	)
 
 	// sign
-	signature := full_sign(curve, rlpEncodedTx, aliceDkg, bobDkg)
+	signature := full_sign(curve, txHash, aliceOutput, bobOutput)
 
-	r := signature.R.Bytes()
-	s := signature.S.Bytes()
-	v := byte(signature.V)
+	fmt.Println("\nBefore signing:")
+	before_v, before_r, before_s := signature.V, signature.R, signature.S
+	fmt.Printf("v: %d\n", before_v)
+	fmt.Printf("r: %x\n", before_r.Bytes())
+	fmt.Printf("s: %x\n", before_s.Bytes())
 
-	rlpEncdoedTxHash := crypto.Keccak256(rlpEncodedTx)
-	pubKey, err := crypto.Ecrecover(rlpEncdoedTxHash, append(append(r, s...), v))
+	// 공개 키 복구
+	pubKey, err := crypto.Ecrecover(crypto.Keccak256(txHash), append(append(before_r.Bytes(), before_s.Bytes()...), byte(before_v)))
 	if err != nil {
 		log.Fatalf("Failed to recover public key: %v", err)
 	}
-	marshalPub, _ := crypto.UnmarshalPubkey(pubKey)
-	recoveredAddr := crypto.PubkeyToAddress(*marshalPub)
+
+	// 공개 키에서 주소 추출
+	pubKeyECDSA, _ := crypto.UnmarshalPubkey(pubKey)
+	recoveredAddr := crypto.PubkeyToAddress(*pubKeyECDSA)
 	fmt.Printf("Recovered address: %s\n", recoveredAddr.Hex())
 
-	// check verify
-	signatureBytes := append(signature.R.Bytes(), signature.S.Bytes()...)
-	isVerified := verifySignature(aliceDkg.Output().PublicKey.ToAffineUncompressed(), crypto.Keccak256(rlpEncodedTx), signatureBytes)
-	fmt.Println("is Verified:", isVerified)
-	fmt.Println("Before signing:")
-	fmt.Printf("v: %d\n", signature.V)
-	fmt.Printf("r: %x\n", signature.R.Bytes())
-	fmt.Printf("s: %x\n", signature.S.Bytes())
+	// rlpEncdoedTxHash := crypto.Keccak256(rlpEncodedTx)
+	// pubKey, err := crypto.Ecrecover(rlpEncdoedTxHash, append(append(r, s...), v))
+	// if err != nil {
+	// 	log.Fatalf("Failed to recover public key: %v", err)
+	// }
+	// marshalPub, _ := crypto.UnmarshalPubkey(pubKey)
+	// recoveredAddr := crypto.PubkeyToAddress(*marshalPub)
+	// fmt.Printf("Recovered address: %s\n", recoveredAddr.Hex())
 
-	// make signed tx
-	signer := types.NewEIP155Signer(chainID)
-	hash := signer.Hash(tx)
-	fmt.Printf("Transaction hash used for signing: %x\n", hash)
+	// // check verify
+	signatureBytes := append(signature.R.Bytes(), signature.S.Bytes()...)
+	isVerified := verifySignature(bobOutput.PublicKey.ToAffineUncompressed(), crypto.Keccak256(txHash), signatureBytes)
+	fmt.Println("\nis Verified:", isVerified)
+
+	// // make signed tx
 	signatureBytes = append(signatureBytes, byte(signature.V))
-	signedTx, err := tx.WithSignature(signer, signatureBytes)
-	if err != nil {
-		log.Fatalf("failed to add signature to transaction: %v", err)
-	}
-	// 서명 후 VRS 값 출력
+	signedRawTx, _ := tx.WithSignature(signer, signatureBytes)
+	signedRawTxBytes, _ := rlp.EncodeToBytes(signedRawTx)
+	signedRawTxHex := hexutil.Encode(signedRawTxBytes)
+	fmt.Println("\nsignedRawTxHex:", signedRawTxHex)
+
 	fmt.Println("\nAfter signing:")
-	after_v, after_r, after_s := signedTx.RawSignatureValues()
+	after_v, after_r, after_s := signedRawTx.RawSignatureValues()
 	fmt.Printf("v: %d\n", after_v)
 	fmt.Printf("r: %x\n", after_r)
 	fmt.Printf("s: %x\n", after_s)
-	printSignedTxAsJSON(signedTx)
-	rlpEncodedSignedTx, _ := signedTx.MarshalBinary()
-	fmt.Println("signedTx: ", common.Bytes2Hex(rlpEncodedSignedTx))
 
-	// send signed tx
-	sender, err := signer.Sender(signedTx)
-	if err != nil {
-		log.Fatalf("Failed to derive sender from signed transaction: %v", err)
-	}
-	fmt.Printf("Derived sender from signed transaction: %s\n", sender.Hex())
+	printSignedTxAsJSON(signedRawTx)
+
+	// if err != nil {
+	// 	log.Fatalf("failed to add signature to transaction: %v", err)
+	// }
+	// // 서명 후 VRS 값 출력
+
+	// rlpEncodedSignedTx, _ := signedTx.MarshalBinary()
+	// fmt.Println("signedTx: ", common.Bytes2Hex(rlpEncodedSignedTx))
+
+	// // send signed tx
+	// sender, err := signer.Sender(signedTx)
+	// if err != nil {
+	// 	log.Fatalf("Failed to derive sender from signed transaction: %v", err)
+	// }
+	// fmt.Printf("Derived sender from signed transaction: %s\n", sender.Hex())
 	// err = eth.SendSignedTransaction(client, signedTx, true)
 	// if err != nil {
 	// 	log.Fatalf("failed to send signed transaction: %v", err)
@@ -141,7 +180,7 @@ func injectTestEther(client *ethclient.Client, privateKey string, toAddress comm
 	}
 }
 
-func generateRlpEncodedTx(client ethclient.Client, fromAddress common.Address, toAddress common.Address, amount *big.Int) (*types.Transaction, []byte) {
+func generateRlpEncodedTx(client ethclient.Client, signer types.Signer, fromAddress common.Address, toAddress common.Address, amount *big.Int) (*types.Transaction, []byte) {
 	// sign
 	nonce, err := client.PendingNonceAt(context.Background(), fromAddress)
 	if err != nil {
@@ -155,9 +194,9 @@ func generateRlpEncodedTx(client ethclient.Client, fromAddress common.Address, t
 
 	gasLimit := uint64(21000)
 	tx := eth.GenerateTransaction(nonce, toAddress, amount, gasLimit, gasPrice, nil)
-
-	rlpEncodedTx, _ := tx.MarshalBinary()
-	return tx, rlpEncodedTx
+	txHash := signer.Hash(tx).Bytes()
+	// rlpEncodedTx, _ := tx.MarshalBinary()
+	return tx, txHash
 }
 
 func full_dkg(curve *curves.Curve) (*dkg.Alice, *dkg.Bob, string, common.Address) {
@@ -229,9 +268,9 @@ func full_dkg(curve *curves.Curve) (*dkg.Alice, *dkg.Bob, string, common.Address
 	return aliceDkg, bobDkg, hexutil.Encode(publicKeyBytes), address
 }
 
-func full_sign(curve *curves.Curve, message []byte, aliceDkg *dkg.Alice, bobDkg *dkg.Bob) *curves.EcdsaSignature {
-	aliceSign := sign.NewAlice(curve, sha3.NewLegacyKeccak256(), aliceDkg.Output())
-	bobSign := sign.NewBob(curve, sha3.NewLegacyKeccak256(), bobDkg.Output())
+func full_sign(curve *curves.Curve, message []byte, aliceDkgOutput *dkg.AliceOutput, bobDkgOutput *dkg.BobOutput) *curves.EcdsaSignature {
+	aliceSign := sign.NewAlice(curve, sha3.NewLegacyKeccak256(), aliceDkgOutput)
+	bobSign := sign.NewBob(curve, sha3.NewLegacyKeccak256(), bobDkgOutput)
 
 	seed, err := aliceSign.Round1GenerateRandomSeed()
 	if err != nil {
