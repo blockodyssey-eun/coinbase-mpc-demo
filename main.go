@@ -112,9 +112,7 @@ func main() {
 	fmt.Printf("is valid signature: %t\n", isVerified)
 
 	// V
-	var recid int64 = 0
-	V := byte(big.NewInt(recid).Uint64())
-	signatureBytes = append(signatureBytes, V)
+	signatureBytes = append(signatureBytes, byte(signature.V))
 	signedTx, err := tx.WithSignature(signer, signatureBytes)
 	if err != nil {
 		log.Fatalf("Failed to sign transaction: %v", err)
