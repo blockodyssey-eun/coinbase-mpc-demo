@@ -24,8 +24,6 @@ import (
 	"golang.org/x/crypto/sha3"
 )
 
-const payloadKey = "direct"
-
 func loadENV() (string, string) {
 	err := godotenv.Load(".env")
 	if err != nil {
@@ -35,7 +33,7 @@ func loadENV() (string, string) {
 }
 
 func main() {
-	INFURA_KEY, _ := loadENV()
+	INFURA_KEY, PRIVATE_KEY := loadENV()
 
 	infuraURL := fmt.Sprintf("https://sepolia.infura.io/v3/%s", INFURA_KEY)
 	client, err := ethclient.Dial(infuraURL)
@@ -72,15 +70,15 @@ func main() {
 	}
 
 	// inject test ether
-	amount := big.NewInt(10000000000000) // 0.0001 Ether
-	// injectTestEther(client, PRIVATE_KEY, address, amount)
+	amount := big.NewInt(10000000000000000) // 0.001 Ether
+	injectTestEther(client, PRIVATE_KEY, address, amount)
 
 	signer := types.NewEIP155Signer(chainID)
 	tx, txHash := generateRlpEncodedTx(
 		*client,
 		signer,
 		address,
-		common.HexToAddress("0x1139F74a15f25f7503B30cd36D527DA5A6D3E15D"),
+		common.HexToAddress("0xFDcBF476B286796706e273F86aC51163DA737FA8"),
 		new(big.Int).Div(amount, big.NewInt(3)),
 	)
 
@@ -122,67 +120,14 @@ func main() {
 		log.Fatalf("Failed to recover sender: %v", err)
 	}
 	fmt.Printf("Recovered sender: %s\n", sender.Hex())
-	// fmt.Println("\nBefore signing:")
-	// before_v, before_r, before_s := signature.V, signature.R, signature.S
-	// fmt.Printf("v: %d\n", before_v)
-	// fmt.Printf("r: %x\n", before_r.Bytes())
-	// fmt.Printf("s: %x\n", before_s.Bytes())
 
-	// // 공개 키 복구
-	// pubKey, err := crypto.Ecrecover(txHash, signatureBytes)
-	// if err != nil {
-	// 	log.Fatalf("Failed to recover public key: %v", err)
-	// }
-
-	// // 공개 키에서 주소 추출
-	// pubKeyECDSA, _ := crypto.UnmarshalPubkey(pubKey)
-	// recoveredAddr := crypto.PubkeyToAddress(*pubKeyECDSA)
-	// fmt.Printf("Recovered address: %s\n", recoveredAddr.Hex())
-
-	// // check verify
-	// signatureBytes := append(signature.R.Bytes(), signature.S.Bytes()...)
-	// // verification_by_goethereum := crypto.VerifySignature(, txHash, signatureBytes)
-	// fmt.Println("Publickey:", bobOutput.PublicKey.ToAffineCompressed())
-	// isVerified := verifySignature(bobOutput.PublicKey.ToAffineUncompressed(), txHash, signatureBytes)
-	// fmt.Println("\nis Verified:", isVerified)
-
-	// // make signed tx
-	// signatureBytes = append(signatureBytes, byte(signature.V))
 	signedRawTx, _ := tx.WithSignature(signer, signatureBytes)
-	// signedRawTxBytes, _ := rlp.EncodeToBytes(signedRawTx)
-	// signedRawTxHex := hexutil.Encode(signedRawTx)
-	// fmt.Println("\nsignedRawTxHex:", signedRawTxHex)
-
-	// fmt.Println("\nAfter signing:")
-	// after_v, after_r, after_s := signedRawTx.RawSignatureValues()
-	// fmt.Printf("v: %d\n", after_v)
-	// fmt.Printf("r: %x\n", after_r)
-	// fmt.Printf("s: %x\n", after_s)
-
 	printSignedTxAsJSON(signedRawTx)
 
-	// if err != nil {
-	// 	log.Fatalf("failed to add signature to transaction: %v", err)
-	// }
-	// // 서명 후 VRS 값 출력
-
-	// rlpEncodedSignedTx, _ := signedTx.MarshalBinary()
-	// fmt.Println("signedTx: ", common.Bytes2Hex(rlpEncodedSignedTx))
-
-	// // send signed tx
-	// sender, err := signer.Sender(signedTx)
-	// if err != nil {
-	// 	log.Fatalf("Failed to derive sender from signed transaction: %v", err)
-	// }
-	// fmt.Printf("Derived sender from signed transaction: %s\n", sender.Hex())
-	// err = eth.SendSignedTransaction(client, signedTx, true)
-	// if err != nil {
-	// 	log.Fatalf("failed to send signed transaction: %v", err)
-	// }
-}
-
-func verifySignature(unCompressedAffinePublicKey []byte, digest []byte, signature []byte) bool {
-	return crypto.VerifySignature(unCompressedAffinePublicKey, digest, signature)
+	err = eth.SendSignedTransaction(client, signedTx, true)
+	if err != nil {
+		log.Fatalf("failed to send signed transaction: %v", err)
+	}
 }
 
 func injectTestEther(client *ethclient.Client, privateKey string, toAddress common.Address, amount *big.Int) {
@@ -209,10 +154,15 @@ func generateRlpEncodedTx(client ethclient.Client, signer types.Signer, fromAddr
 		log.Fatalf("failed to get nonce: %v", err)
 	}
 
+	fmt.Println("fromAddress: ", fromAddress.Hex())
+	fmt.Println("nonce: ", nonce)
+
 	gasPrice, err := client.SuggestGasPrice(context.Background())
 	if err != nil {
 		log.Fatalf("failed to get gas price: %v", err)
 	}
+	gasPrice = new(big.Int).Mul(gasPrice, big.NewInt(15))
+	gasPrice = new(big.Int).Div(gasPrice, big.NewInt(10))
 
 	gasLimit := uint64(21000)
 	tx := eth.GenerateTransaction(nonce, toAddress, amount, gasLimit, gasPrice, nil)

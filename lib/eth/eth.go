@@ -48,6 +48,11 @@ func SignTransactionWithPrivateKey(client *ethclient.Client, privateKey *ecdsa.P
 	if err != nil {
 		return nil, fmt.Errorf("failed to get gas price: %v", err)
 	}
+	gasPrice = new(big.Int).Mul(gasPrice, big.NewInt(15))
+	gasPrice = new(big.Int).Div(gasPrice, big.NewInt(10))
+
+	fmt.Println("fromAddress: ", fromAddress.Hex())
+	fmt.Println("nonce: ", nonce)
 
 	tx := GenerateTransaction(nonce, toAddress, amount, gasLimit, gasPrice, nil)
 
