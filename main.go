@@ -18,6 +18,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/rlp"
 
 	"github.com/joho/godotenv"
 	"golang.org/x/crypto/sha3"
@@ -217,7 +218,15 @@ func generateRlpEncodedTx(client ethclient.Client, signer types.Signer, fromAddr
 
 	gasLimit := uint64(21000)
 	tx := eth.GenerateTransaction(nonce, toAddress, amount, gasLimit, gasPrice, nil)
-	txHash := signer.Hash(tx).Bytes()
+	txHash, _ := rlp.EncodeToBytes([]interface{}{
+		tx.Nonce(),
+		tx.GasPrice(),
+		tx.Gas(),
+		tx.To(),
+		tx.Value(),
+		tx.Data(),
+		signer.ChainID(), uint(0), uint(0),
+	})
 	return tx, txHash
 }
 
