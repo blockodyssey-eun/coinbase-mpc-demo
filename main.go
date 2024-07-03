@@ -71,8 +71,8 @@ func main() {
 	s := signature.S.Bytes()
 	v := byte(signature.V)
 
-	hash := crypto.Keccak256(rlpEncodedTx)
-	pubKey, err := crypto.Ecrecover(hash, append(append(r, s...), v))
+	rlpEncdoedTxHash := crypto.Keccak256(rlpEncodedTx)
+	pubKey, err := crypto.Ecrecover(rlpEncdoedTxHash, append(append(r, s...), v))
 	if err != nil {
 		log.Fatalf("Failed to recover public key: %v", err)
 	}
@@ -84,22 +84,31 @@ func main() {
 	signatureBytes := append(signature.R.Bytes(), signature.S.Bytes()...)
 	isVerified := verifySignature(aliceDkg.Output().PublicKey.ToAffineUncompressed(), crypto.Keccak256(rlpEncodedTx), signatureBytes)
 	fmt.Println("is Verified:", isVerified)
+	fmt.Println("Before signing:")
+	fmt.Printf("v: %d\n", signature.V)
+	fmt.Printf("r: %x\n", signature.R.Bytes())
+	fmt.Printf("s: %x\n", signature.S.Bytes())
 
 	// make signed tx
+	signer := types.NewEIP155Signer(chainID)
+	hash := signer.Hash(tx)
+	fmt.Printf("Transaction hash used for signing: %x\n", hash)
 	signatureBytes = append(signatureBytes, byte(signature.V))
-	fmt.Printf("Generated signature - R: %x, S: %x, V: %d\n", signature.R.Bytes(), signature.S.Bytes(), signature.V)
-	fmt.Printf("Signature bytes used for tx.WithSignature: %x\n", signatureBytes)
-
-	signedTx, err := tx.WithSignature(types.NewEIP155Signer(chainID), signatureBytes)
+	signedTx, err := tx.WithSignature(signer, signatureBytes)
 	if err != nil {
 		log.Fatalf("failed to add signature to transaction: %v", err)
 	}
+	// 서명 후 VRS 값 출력
+	fmt.Println("\nAfter signing:")
+	after_v, after_r, after_s := signedTx.RawSignatureValues()
+	fmt.Printf("v: %d\n", after_v)
+	fmt.Printf("r: %x\n", after_r)
+	fmt.Printf("s: %x\n", after_s)
 	printSignedTxAsJSON(signedTx)
 	rlpEncodedSignedTx, _ := signedTx.MarshalBinary()
 	fmt.Println("signedTx: ", common.Bytes2Hex(rlpEncodedSignedTx))
 
 	// send signed tx
-	signer := types.NewEIP155Signer(chainID)
 	sender, err := signer.Sender(signedTx)
 	if err != nil {
 		log.Fatalf("Failed to derive sender from signed transaction: %v", err)
