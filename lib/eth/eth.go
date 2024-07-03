@@ -37,8 +37,6 @@ func SignTransactionWithPrivateKey(client *ethclient.Client, privateKey *ecdsa.P
 	}
 
 	fromAddress := crypto.PubkeyToAddress(*publicKeyECDSA)
-	fmt.Printf("fromAddress: %s\n", fromAddress)
-	fmt.Printf("toAddress: %s\n", toAddress)
 
 	nonce, err := client.PendingNonceAt(context.Background(), fromAddress)
 	if err != nil {
